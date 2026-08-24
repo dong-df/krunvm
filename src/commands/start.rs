@@ -44,6 +44,12 @@ pub struct StartCmd {
     /// env(s) in format "key=value" to be exposed to the VM
     #[arg(long = "env")]
     envs: Option<Vec<String>>,
+
+    /// vsock port to host Unix socket mapping(s) in format
+    /// "PORT:/host/path.sock". Guest connections to AF_VSOCK
+    /// (CID 2, PORT) are proxied to the Unix socket on the host.
+    #[arg(long = "vsock")]
+    vsocks: Option<Vec<String>>,
 }
 
 impl StartCmd {
@@ -76,11 +82,39 @@ impl StartCmd {
             Vec::new()
         };
 
+        let vsock_ports: Vec<(u32, String)> = self
+            .vsocks
+            .unwrap_or_default()
+            .into_iter()
+            .map(|val| match val.split_once(':') {
+                Some((port, path)) => match port.parse::<u32>() {
+                    Ok(port) => (port, path.to_string()),
+                    Err(_) => {
+                        println!("Invalid vsock port in mapping: {}", val);
+                        std::process::exit(-1);
+                    }
+                },
+                None => {
+                    println!("Invalid vsock mapping (expected PORT:PATH): {}", val);
+                    std::process::exit(-1);
+                }
+            })
+            .collect();
+
         set_rlimits();
 
         let _file = set_lock(&rootfs);
 
-        unsafe { exec_vm(vmcfg, &rootfs, self.command.as_deref(), vm_args, env_pairs) };
+        unsafe {
+            exec_vm(
+                vmcfg,
+                &rootfs,
+                self.command.as_deref(),
+                vm_args,
+                env_pairs,
+                vsock_ports,
+            )
+        };
 
         umount_container(cfg, vmcfg).expect("Error unmounting container");
     }
@@ -143,6 +177,7 @@ unsafe fn exec_vm(
     cmd: Option<&str>,
     args: Vec<CString>,
     env_pairs: Vec<CString>,
+    vsock_ports: Vec<(u32, String)>,
 ) {
     //bindings::krun_set_log_level(9);
 
@@ -183,6 +218,15 @@ unsafe fn exec_vm(
     if ret < 0 {
         println!("Error setting VM port map");
         std::process::exit(-1);
+    }
+
+    for (port, path) in vsock_ports.iter() {
+        let c_path = CString::new(path.as_str()).unwrap();
+        let ret = bindings::krun_add_vsock_port(ctx, *port, c_path.as_ptr());
+        if ret < 0 {
+            println!("Error adding vsock port {} -> {}", port, path);
+            std::process::exit(-1);
+        }
     }
 
     if !vmcfg.workdir.is_empty() {
