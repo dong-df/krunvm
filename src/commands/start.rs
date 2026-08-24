@@ -118,7 +118,7 @@ fn map_volumes(_ctx: u32, vmcfg: &VmConfig, rootfs: &str) {
 fn map_volumes(ctx: u32, vmcfg: &VmConfig, rootfs: &str) -> Vec<(String, String)> {
     let mut mounts = Vec::new();
     for (idx, (host_path, guest_path)) in vmcfg.mapped_volumes.iter().enumerate() {
-        let full_guest = format!("{}{}", &rootfs, guest_path);
+        let full_guest = format!("{}{}", rootfs, guest_path);
         let full_guest_path = Path::new(&full_guest);
         if !full_guest_path.exists() {
             std::fs::create_dir(full_guest_path)
